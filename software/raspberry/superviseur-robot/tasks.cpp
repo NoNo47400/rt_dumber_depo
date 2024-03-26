@@ -26,6 +26,9 @@
 #define PRIORITY_TRECEIVEFROMMON 25
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TCAMERA 21
+#define PRIORITY_BATTERY 19
+#define PRIORITY_START_CAMERA 20
+#define PRIORITY_ENVOI_CAMERA 20
 
 /*
  * Some remarks:
@@ -73,6 +76,11 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_mutex_create(&mutex_CamOpened, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
     cout << "Mutexes created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -94,6 +102,11 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_sem_create(&sem_openCam, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
     cout << "Semaphores created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -123,6 +136,20 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_create(&th_battery_state, "th_battery_state", 0, PRIORITY_BATTERY, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_start_camera, "th_start_camera", 0, PRIORITY_START_CAMERA, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_envoi_img, "th_envoi_camera", 0, PRIORITY_ENVOI_CAMERA, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
+    
     cout << "Tasks created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -167,6 +194,19 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_task_start(&th_battery_state, (void(*)(void*)) & Tasks::BatteryState, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_start_camera, (void(*)(void*)) & Tasks::StartCamera, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_envoi_img, (void(*)(void*)) & Tasks::EnvoiImg, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    
 
     cout << "Tasks launched" << endl << flush;
 }
@@ -266,7 +306,10 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_openComRobot);
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
             rt_sem_v(&sem_startRobot);
-        } else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
+        } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
+            rt_sem_v(&sem_openCam);
+        }
+        else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_LEFT) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_RIGHT) ||
@@ -415,3 +458,87 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
     return msg;
 }
 
+/**
+ * @brief Pour recup le niveau de batterie
+ */
+void Tasks::BatteryState(void *arg) {
+    int rs;
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    MessageBattery * msg;
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
+    rt_task_set_periodic(NULL, TM_NOW, 500000000);
+    while (1) {
+        rt_task_wait_period(NULL);
+        rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
+        rs = robotStarted;
+        rt_mutex_release(&mutex_robotStarted);
+        if (rs == 1) {
+            cout << "Periodic battery state";
+            rt_mutex_acquire(&mutex_robot, TM_INFINITE);
+            msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
+            rt_mutex_release(&mutex_robot);
+            cout << " write battery state: " << msg;
+            rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
+            monitor.Write(msg);
+            rt_mutex_release(&mutex_monitor);
+        }
+        cout << endl << flush;
+    }
+}   
+
+void Tasks::StartCamera(void *arg){
+    
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    Message *msg_to_mon;
+    // Création d'une caméra
+    Camera * cam;
+    cam = new Camera(sm,10);
+    bool cam_openned_local = false;
+
+    while (1) {
+        rt_sem_p(&sem_openCam, TM_INFINITE);  // Peut-etre a changer lorsqu'on rajoutera le stop camera car besoin d'un mutex ou d'une autre tache
+        cam_openned_local = cam->Open();
+        rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
+        CamOpened = cam_openned_local;
+        rt_mutex_release(&mutex_CamOpened);
+        if (cam_openned_local) {
+            msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
+        }
+        else {
+            msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+        }
+        WriteInQueue(&q_messageToMon, msg_to_mon);
+    }
+}
+
+void Tasks::EnvoiImg(void *arg){
+    
+    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    // Création d'une caméra
+    Camera * cam;
+    cam = new Camera(sm,10);
+    bool cam_openned_local = false;
+    MessageImg * flux_video;
+
+    while (1) {
+        rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
+        cam_openned_local = CamOpened;
+        rt_mutex_release(&mutex_CamOpened);
+        if(cam_openned_local) {
+            Img * img = new Img(cam->Grab());
+            MessageImg * msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
+            WriteInQueue(&q_messageToMon, msgImg);
+        }
+        
+    }
+}
