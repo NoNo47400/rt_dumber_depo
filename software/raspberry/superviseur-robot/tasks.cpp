@@ -530,7 +530,12 @@ void Tasks::StartCamera(void *arg){
             rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
             CamOpened = false;
             rt_mutex_release(&mutex_CamOpened);
-            cam_openned_local = cam->Close();
+            if (cam_openncam->Close();ed_local) {
+                msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
+            }
+            else {
+                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+            }
         }
     }
 }
