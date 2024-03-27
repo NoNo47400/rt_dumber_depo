@@ -80,6 +80,10 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_mutex_create(&mutex_CamOpenAutorisation, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     
     cout << "Mutexes created successfully" << endl << flush;
 
@@ -102,10 +106,10 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_sem_create(&sem_openCam, NULL, 0, S_FIFO)) {
+    /*if (err = rt_sem_create(&sem_openCam, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
-    }
+    }*/
     
     cout << "Semaphores created successfully" << endl << flush;
 
@@ -308,6 +312,8 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_startRobot);
         } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
             rt_sem_v(&sem_openCam);
+        } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
+            rt_sem_v(&sem_openCam);
         }
         else if (msgRcv->CompareID(MESSAGE_ROBOT_GO_FORWARD) ||
                 msgRcv->CompareID(MESSAGE_ROBOT_GO_BACKWARD) ||
@@ -501,20 +507,31 @@ void Tasks::StartCamera(void *arg){
     Camera * cam;
     cam = new Camera(sm,10);
     bool cam_openned_local = false;
-
+    bool cam_open_autorisation = false;
     while (1) {
-        rt_sem_p(&sem_openCam, TM_INFINITE);  // Peut-etre a changer lorsqu'on rajoutera le stop camera car besoin d'un mutex ou d'une autre tache
-        cam_openned_local = cam->Open();
-        rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
-        CamOpened = cam_openned_local;
-        rt_mutex_release(&mutex_CamOpened);
-        if (cam_openned_local) {
-            msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
+        //rt_sem_p(&sem_openCam, TM_INFINITE);  // Peut-etre a changer lorsqu'on rajoutera le stop camera car besoin d'un mutex ou d'une autre tache
+        rt_mutex_acquire(&mutex_CamOpenAutorisation, TM_INFINITE);
+        cam_open_autorisation = CamOpenAutorisation;
+        rt_mutex_release(&mutex_CamOpenAutorisation);
+        if (cam_open_autorisation) {
+            cam_openned_local = cam->Open();
+            rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
+            CamOpened = cam_openned_local;
+            rt_mutex_release(&mutex_CamOpened);
+            if (cam_openned_local) {
+                msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
+            }
+            else {
+                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+            }
+            WriteInQueue(&q_messageToMon, msg_to_mon);
         }
         else {
-            msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+            rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
+            CamOpened = false;
+            rt_mutex_release(&mutex_CamOpened);
+            cam_openned_local = cam->Close();
         }
-        WriteInQueue(&q_messageToMon, msg_to_mon);
     }
 }
 
@@ -529,8 +546,9 @@ void Tasks::EnvoiImg(void *arg){
     cam = new Camera(sm,10);
     bool cam_openned_local = false;
     MessageImg * flux_video;
-
+    rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
+        rt_task_wait_period(NULL);
         rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
         cam_openned_local = CamOpened;
         rt_mutex_release(&mutex_CamOpened);

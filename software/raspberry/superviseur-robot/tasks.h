@@ -67,6 +67,7 @@ private:
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
     bool CamOpened = false;
+    bool CamOpenAutorisation = false;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -89,6 +90,7 @@ private:
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_CamOpened;
+    RT_MUTEX mutex_CamOpenAutorisation;
     /**********************************************************************/
     /* Semaphores                                                         */
     /**********************************************************************/
