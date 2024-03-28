@@ -68,6 +68,14 @@ private:
     int move = MESSAGE_ROBOT_STOP;
     bool CamOpened = false;
     bool CamOpenAutorisation = false;
+    bool SearchingArena = false;
+    Camera * cam;
+    Img * img;
+    bool ArenaValid = false;
+    Arena * ArenaResult;
+    bool UseArena;
+    bool CalculPosition=false;
+    Position * RobotPosition;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -81,6 +89,8 @@ private:
     RT_TASK th_battery_state;
     RT_TASK th_start_camera;
     RT_TASK th_envoi_img;
+    RT_TASK th_search_arena;
+    RT_TASK th_calculate_position;
     
     /**********************************************************************/
     /* Mutex                                                              */
@@ -91,6 +101,11 @@ private:
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_CamOpened;
     RT_MUTEX mutex_CamOpenAutorisation;
+    RT_MUTEX mutex_Camera;
+    RT_MUTEX mutex_SearchingArena;
+    RT_MUTEX mutex_UseArena;
+    RT_MUTEX mutex_CalculPosition;
+    RT_MUTEX mutex_RobotPosition;
     /**********************************************************************/
     /* Semaphores                                                         */
     /**********************************************************************/
@@ -149,9 +164,20 @@ private:
     void StartCamera(void *arg);
     
     /**
-     * @brief Thread send img from camera
+     * @brief Thread sending img from camera
      */
     void EnvoiImg(void *arg);
+
+    /**
+     * @brief Thread searching an arena
+     */
+    void SearchArena(void *arg);
+
+    /**
+     * @brief Thread calculating robot position
+     */
+    void CalculatePosition(void *arg);
+    
     
     /**********************************************************************/
     /* Queue services                                                     */
