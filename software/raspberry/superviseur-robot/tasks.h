@@ -89,7 +89,7 @@ private:
     RT_TASK th_battery_state;
     RT_TASK th_start_camera;
     RT_TASK th_envoi_img;
-    RT_TASK th_search_arena;
+    RT_TASK th_search_my_arena;
     RT_TASK th_calculate_position;
     
     /**********************************************************************/
@@ -172,7 +172,7 @@ private:
     /**
      * @brief Thread searching an arena
      */
-    void SearchArena(void *arg);
+    void SearchMyArena(void *arg);
 
     /**
      * @brief Thread calculating robot position
