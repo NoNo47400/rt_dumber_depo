@@ -72,10 +72,10 @@ private:
     Camera * cam;
     Img * img;
     bool ArenaValid = false;
-    Arena * ArenaResult;
+    Arena ArenaResult;
     bool UseArena;
     bool CalculPosition=false;
-    Position * RobotPosition;
+    Position RobotPosition;
     
     /**********************************************************************/
     /* Tasks                                                              */
@@ -103,6 +103,7 @@ private:
     RT_MUTEX mutex_CamOpenAutorisation;
     RT_MUTEX mutex_Camera;
     RT_MUTEX mutex_SearchingArena;
+    RT_MUTEX mutex_ArenaResult;
     RT_MUTEX mutex_UseArena;
     RT_MUTEX mutex_CalculPosition;
     RT_MUTEX mutex_RobotPosition;

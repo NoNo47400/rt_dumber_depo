@@ -104,6 +104,10 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_mutex_create(&mutex_ArenaResult, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     
     
     cout << "Mutexes created successfully" << endl << flush;
@@ -173,14 +177,14 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_search_arena, "th_envoi_camera", 0, PRIORITY_SEARCH_ARENA, 0)) {
-        cerr << "Error task create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_create(&th_calculate_position, "th_envoi_camera", 0, PRIORITY_CALCULATE_POSITION, 0)) {
-        cerr << "Error task create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
+//    if (err = rt_task_create(&th_search_arena, "th_envoi_camera", 0, PRIORITY_SEARCH_ARENA, 0)) {
+//        cerr << "Error task create: " << strerror(-err) << endl << flush;
+//        exit(EXIT_FAILURE);
+//    }
+//    if (err = rt_task_create(&th_calculate_position, "th_envoi_camera", 0, PRIORITY_CALCULATE_POSITION, 0)) {
+//        cerr << "Error task create: " << strerror(-err) << endl << flush;
+//        exit(EXIT_FAILURE);
+//    }
     
     
     cout << "Tasks created successfully" << endl << flush;
@@ -239,14 +243,14 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_start(&th_search_arena, (void(*)(void*)) & Tasks::SearchArena, this)) {
-        cerr << "Error task start: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_task_start(&th_calculate_position, (void(*)(void*)) & Tasks::CalculatePosition, this)) {
-        cerr << "Error task start: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
+//    if (err = rt_task_start(&th_search_arena, (void(*)(void*)) & Tasks::SearchArena, this)) {
+//        cerr << "Error task start: " << strerror(-err) << endl << flush;
+//        exit(EXIT_FAILURE);
+//    }
+//    if (err = rt_task_start(&th_calculate_position, (void(*)(void*)) & Tasks::CalculatePosition, this)) {
+//        cerr << "Error task start: " << strerror(-err) << endl << flush;
+//        exit(EXIT_FAILURE);
+//    }
     cout << "Tasks launched" << endl << flush;
 }
 
@@ -589,16 +593,11 @@ void Tasks::StartCamera(void *arg){
             CamOpened = false;
             rt_mutex_release(&mutex_CamOpened);
             rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-            cam_statut_local = cam_openncam->Close();
+            cam->Close();
             rt_mutex_release(&mutex_Camera);
-            if (cam_statut_local) {
-                msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
-            }
-            else {
-                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
-            }
+            msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
         }
-        WriteInQueue(&q_messageToMon, msg_to_mon);
+        //WriteInQueue(&q_messageToMon, msg_to_mon);
     }
 }
 
@@ -648,7 +647,7 @@ void Tasks::EnvoiImg(void *arg){
                     flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
                     rt_mutex_release(&mutex_Camera);
                 }
-                WriteInQueue(&q_messageToMon, msgImg);
+                WriteInQueue(&q_messageToMon, flux_video);
                 
             }
             
@@ -659,92 +658,103 @@ void Tasks::EnvoiImg(void *arg){
     }
 }
 
-void Tasks::SearchArena(void *arg){
-    
-    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
-    // Synchronization barrier (waiting that all tasks are starting)
-    rt_sem_p(&sem_barrier, TM_INFINITE);
-    bool searching_arena_local = false;
-    bool arena_valid_local = false;
-    Message *msg_to_mon;
-    MessageImg *msgImg;
-    while (1) {
-        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-        searching_arena_local = SearchingArena;
-        arena_valid_local = ArenaValid;
-        rt_mutex_release(&mutex_SearchingArena);
-        if (arena_valid_local) {
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = true;
-            rt_mutex_release(&mutex_UseArena);
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            SearchingArena = false;
-            rt_mutex_release(&mutex_SearchingArena);
-        }
-        else if (searching_arena_local) {
-            ArenaResult = SearchArena();
-            if(ArenaResult->IsEmpty())
-            {
-                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
-                WriteInQueue(&q_messageToMon, msg_to_mon);
-            }
-            else {
-                rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-                img = new Img(cam->Grab());
-                img->DrawArena(ArenaResult);
-                MessageImg * msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                rt_mutex_release(&mutex_Camera);
-                WriteInQueue(&q_messageToMon, msgImg);
-            }
-        }
-        else {
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            SearchingArena = false;
-            rt_mutex_release(&mutex_SearchingArena);
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = false;
-            rt_mutex_release(&mutex_UseArena);
-        }
-    }
-}
-
-void Tasks::CalculatePosition(void *arg){
-    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
-    // Synchronization barrier (waiting that all tasks are starting)
-    rt_sem_p(&sem_barrier, TM_INFINITE);
-    bool calculate_position = false;
-    bool use_arena_local = false;
-    std::list<Position> * robot_position_list_local;
-    MessagePosition * msgPos;
-    rt_task_set_periodic(NULL, TM_NOW, 100000000);
-    while (1) {
-        rt_task_wait_period(NULL);
-        rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
-        calculate_position=CalculPosition;
-        rt_mutex_release(&mutex_CalculPosition);
-        rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-        use_arena_local = UseArena;
-        rt_mutex_release(&mutex_UseArena);
-        if (calculate_position && use_arena_local) {
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-            img = new Img(cam->Grab());
-            robot_position_list_local = img->SearchRobot(ArenaResult);
-            rt_mutex_release(&mutex_Camera);
-            if(robot_position_list_local->empty())
-            {
-                // pas sûr de celui-la
-                rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
-                RobotPosition->center=cv::Point2f(-1.0,-1.0);
-                msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);
-                rt_mutex_release(&mutex_RobotPosition);
-            }
-            else {
-                rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
-                RobotPosition = robot_position_list_local->front();
-                msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);
-                rt_mutex_release(&mutex_RobotPosition);
-            }
-        }
-    }
-}
+//void Tasks::SearchArena(void *arg){
+//    
+//    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+//    // Synchronization barrier (waiting that all tasks are starting)
+//    rt_sem_p(&sem_barrier, TM_INFINITE);
+//    bool searching_arena_local = false;
+//    bool arena_valid_local = false;
+//    Message *msg_to_mon;
+//    MessageImg *msgImg;
+//    Arena arena_local;
+//    while (1) {
+//        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//        searching_arena_local = SearchingArena;
+//        arena_valid_local = ArenaValid;
+//        rt_mutex_release(&mutex_SearchingArena);
+//        if (arena_valid_local) {
+//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+//            UseArena = true;
+//            rt_mutex_release(&mutex_UseArena);
+//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//            SearchingArena = false;
+//            rt_mutex_release(&mutex_SearchingArena);
+//        }
+//        else if (searching_arena_local) {
+//            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+//            img = new Img(cam->Grab());
+//            arena_local = img->SearchArena();
+//            rt_mutex_release(&mutex_Camera);
+//                     
+//            if(arena_local.IsEmpty())
+//            {
+//                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+//                WriteInQueue(&q_messageToMon, msg_to_mon);
+//            }
+//            else {
+//                rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+//                ArenaResult = arena_local;
+//                rt_mutex_release(&mutex_ArenaResult);   
+//                rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+//                img = new Img(cam->Grab());
+//                img->DrawArena(arena_local);
+//                msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
+//                rt_mutex_release(&mutex_Camera);
+//                WriteInQueue(&q_messageToMon, msgImg);
+//            }
+//        }
+//        else {
+//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//            SearchingArena = false;
+//            rt_mutex_release(&mutex_SearchingArena);
+//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+//            UseArena = false;
+//            rt_mutex_release(&mutex_UseArena);
+//        }
+//    }
+//}
+//
+//void Tasks::CalculatePosition(void *arg){
+//    cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
+//    // Synchronization barrier (waiting that all tasks are starting)
+//    rt_sem_p(&sem_barrier, TM_INFINITE);
+//    bool calculate_position = false;
+//    bool use_arena_local = false;
+//    std::list<Position> robot_position_list_local;
+//    MessagePosition * msgPos;
+//    rt_task_set_periodic(NULL, TM_NOW, 100000000);
+//    while (1) {
+//        rt_task_wait_period(NULL);
+//        rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
+//        calculate_position=CalculPosition;
+//        rt_mutex_release(&mutex_CalculPosition);
+//        rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+//        use_arena_local = UseArena;
+//        rt_mutex_release(&mutex_UseArena);
+//        if (calculate_position && use_arena_local) {
+//            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+//            img = new Img(cam->Grab());
+//            rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+//            robot_position_list_local = img->SearchRobot(ArenaResult);
+//            rt_mutex_release(&mutex_ArenaResult); 
+//            
+//            rt_mutex_release(&mutex_Camera);
+//            if(robot_position_list_local.empty())
+//            {
+//                // pas sûr de celui-la
+//                rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
+//                RobotPosition.center=cv::Point2f(-1.0,-1.0);
+//                msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);
+//                rt_mutex_release(&mutex_RobotPosition);
+//            }
+//            else {
+//                rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
+//                RobotPosition = robot_position_list_local.front();
+//                msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);
+//                rt_mutex_release(&mutex_RobotPosition);
+//            }
+//        }
+//    }
+//}
 
