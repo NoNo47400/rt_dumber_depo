@@ -29,7 +29,7 @@
 #define PRIORITY_BATTERY 19
 #define PRIORITY_START_CAMERA 20
 #define PRIORITY_ENVOI_CAMERA 20
-#define PRIORITY_SEARCH_ARENA 19
+#define PRIORITY_SEARCH_MY_ARENA 19
 #define PRIORITY_CALCULATE_POSITION 19
 
 
@@ -177,7 +177,7 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_search_my_arena, "th_search_my_arena", 0, PRIORITY_SEARCH_ARENA, 0)) {
+    if (err = rt_task_create(&th_search_my_arena, "th_search_my_arena", 0, PRIORITY_SEARCH_MY_ARENA, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -648,14 +648,13 @@ void Tasks::EnvoiImg(void *arg){
                     flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
                     rt_mutex_release(&mutex_Camera);
                 }
+                rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
                 WriteInQueue(&q_messageToMon, flux_video);
+                rt_mutex_release(&mutex_monitor);
+               
                 
             }
-            
         }
-        
-
-        
     }
 }
 
@@ -669,51 +668,51 @@ void Tasks::SearchMyArena(void *arg){
     Message *msg_to_mon;
     MessageImg *msgImg;
     Arena arena_local;
-    while (1) {
-        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-        searching_arena_local = SearchingArena;
-        arena_valid_local = ArenaValid;
-        rt_mutex_release(&mutex_SearchingArena);
-        if (arena_valid_local) {
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = true;
-            rt_mutex_release(&mutex_UseArena);
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            SearchingArena = false;
-            rt_mutex_release(&mutex_SearchingArena);
-        }
-        else if (searching_arena_local) {
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-            img = new Img(cam->Grab());
-            arena_local = img->SearchArena();
-            rt_mutex_release(&mutex_Camera);
-                     
-            if(arena_local.IsEmpty())
-            {
-                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
-                WriteInQueue(&q_messageToMon, msg_to_mon);
-            }
-            else {
-                rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
-                ArenaResult = arena_local;
-                rt_mutex_release(&mutex_ArenaResult);   
-                rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-                img = new Img(cam->Grab());
-                img->DrawArena(arena_local);
-                msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                rt_mutex_release(&mutex_Camera);
-                WriteInQueue(&q_messageToMon, msgImg);
-            }
-        }
-        else {
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            SearchingArena = false;
-            rt_mutex_release(&mutex_SearchingArena);
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = false;
-            rt_mutex_release(&mutex_UseArena);
-        }
-    }
+//    while (1) {
+//        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//        searching_arena_local = SearchingArena;
+//        arena_valid_local = ArenaValid;
+//        rt_mutex_release(&mutex_SearchingArena);
+//        if (arena_valid_local) {
+//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//            SearchingArena = false;
+//            rt_mutex_release(&mutex_SearchingArena);
+//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+//            UseArena = true;
+//            rt_mutex_release(&mutex_UseArena);
+//        }
+//        else if (searching_arena_local) {
+//            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+//            img = new Img(cam->Grab());
+//            arena_local = img->SearchArena();
+//            rt_mutex_release(&mutex_Camera);
+//                     
+//            if(arena_local.IsEmpty())
+//            {
+//                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+//                //WriteInQueue(&q_messageToMon, msg_to_mon);
+//            }
+//            else {
+//                rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+//                ArenaResult = arena_local;
+//                rt_mutex_release(&mutex_ArenaResult);   
+//                rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+//                img = new Img(cam->Grab());
+//                img->DrawArena(arena_local);
+//                msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
+//                rt_mutex_release(&mutex_Camera);
+//                WriteInQueue(&q_messageToMon, msgImg);
+//            }
+//        }
+//        else {
+//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//            SearchingArena = false;
+//            rt_mutex_release(&mutex_SearchingArena);
+//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+//            UseArena = false;
+//            rt_mutex_release(&mutex_UseArena);
+//        }
+//    }
 }
 
 void Tasks::CalculatePosition(void *arg){
