@@ -66,8 +66,7 @@ private:
     ComRobot robot;
     int robotStarted = 0;
     int move = MESSAGE_ROBOT_STOP;
-    bool CamOpened = false;
-    bool CamOpenAutorisation = false;
+    bool camStarted = false;
     bool SearchingArena = false;
     Camera * cam;
     Img * img;
@@ -88,6 +87,7 @@ private:
     RT_TASK th_move;
     RT_TASK th_battery_state;
     RT_TASK th_start_camera;
+    RT_TASK th_stop_camera;
     RT_TASK th_envoi_img;
     RT_TASK th_search_my_arena;
     RT_TASK th_calculate_position;
@@ -99,9 +99,8 @@ private:
     RT_MUTEX mutex_robot;
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
-    RT_MUTEX mutex_CamOpened;
-    RT_MUTEX mutex_CamOpenAutorisation;
-    RT_MUTEX mutex_Camera;
+    RT_MUTEX mutex_camStarted;
+    RT_MUTEX mutex_com_camera;
     RT_MUTEX mutex_SearchingArena;
     RT_MUTEX mutex_ArenaResult;
     RT_MUTEX mutex_UseArena;
@@ -114,7 +113,8 @@ private:
     RT_SEM sem_openComRobot;
     RT_SEM sem_serverOk;
     RT_SEM sem_startRobot;
-    RT_SEM sem_openCam;
+    RT_SEM sem_startCam;
+    RT_SEM sem_stopCam;
     /**********************************************************************/
     /* Message queues                                                     */
     /**********************************************************************/
@@ -165,6 +165,11 @@ private:
     void StartCamera(void *arg);
     
     /**
+     * @brief Thread stoping the camera.
+     */
+    void StopCamera(void *arg);
+    
+    /**
      * @brief Thread sending img from camera
      */
     void EnvoiImg(void *arg);
@@ -178,6 +183,7 @@ private:
      * @brief Thread calculating robot position
      */
     void CalculatePosition(void *arg);
+    
     
     
     /**********************************************************************/

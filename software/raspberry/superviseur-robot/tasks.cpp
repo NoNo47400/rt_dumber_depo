@@ -27,7 +27,8 @@
 #define PRIORITY_TSTARTROBOT 20
 #define PRIORITY_TCAMERA 21
 #define PRIORITY_BATTERY 19
-#define PRIORITY_START_CAMERA 20
+#define PRIORITY_START_CAMERA 21
+#define PRIORITY_STOP_CAMERA 22
 #define PRIORITY_ENVOI_CAMERA 20
 #define PRIORITY_SEARCH_MY_ARENA 19
 #define PRIORITY_CALCULATE_POSITION 19
@@ -80,15 +81,12 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_mutex_create(&mutex_CamOpened, NULL)) {
+    if (err = rt_mutex_create(&mutex_camStarted, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_mutex_create(&mutex_CamOpenAutorisation, NULL)) {
-        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_mutex_create(&mutex_Camera, NULL)) {
+
+    if (err = rt_mutex_create(&mutex_com_camera, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -131,6 +129,14 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
+    if (err = rt_sem_create(&sem_startCam, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_stopCam, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
     /*if (err = rt_sem_create(&sem_openCam, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
@@ -170,6 +176,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_create(&th_start_camera, "th_start_camera", 0, PRIORITY_START_CAMERA, 0)) {
+        cerr << "Error task create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_create(&th_stop_camera, "th_stop_camera", 0, PRIORITY_STOP_CAMERA, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -236,6 +246,10 @@ void Tasks::Run() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_task_start(&th_start_camera, (void(*)(void*)) & Tasks::StartCamera, this)) {
+        cerr << "Error task start: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_task_start(&th_stop_camera, (void(*)(void*)) & Tasks::StopCamera, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -350,13 +364,9 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         } else if (msgRcv->CompareID(MESSAGE_ROBOT_START_WITHOUT_WD)) {
             rt_sem_v(&sem_startRobot);
         } else if (msgRcv->CompareID(MESSAGE_CAM_OPEN)) {
-            rt_mutex_acquire(&mutex_CamOpenAutorisation, TM_INFINITE);
-            CamOpenAutorisation = true;
-            rt_mutex_release(&mutex_CamOpenAutorisation);
+            rt_sem_v(&sem_startCam);
         } else if (msgRcv->CompareID(MESSAGE_CAM_CLOSE)) {
-            rt_mutex_acquire(&mutex_CamOpenAutorisation, TM_INFINITE);
-            CamOpenAutorisation = false;
-            rt_mutex_release(&mutex_CamOpenAutorisation);
+            rt_sem_v(&sem_stopCam);
         }
         else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
             rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
@@ -550,13 +560,12 @@ void Tasks::BatteryState(void *arg) {
             msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
             rt_mutex_release(&mutex_robot);
             cout << " write battery state: " << msg;
-            rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
-            monitor.Write(msg);
-            rt_mutex_release(&mutex_monitor);
+            WriteInQueue(&q_messageToMon, msg);
         }
         cout << endl << flush;
     }
 }   
+
 
 void Tasks::StartCamera(void *arg){
     
@@ -566,39 +575,57 @@ void Tasks::StartCamera(void *arg){
     
     Message *msg_to_mon;
     // Création d'une caméra
-    cam = new Camera(sm,10);
-    bool cam_statut_local = false;
-    bool cam_open_autorisation = false;
+    //cam = new Camera(sm,10);
+    bool cam_start_local;
+    
     while (1) {
-        //rt_sem_p(&sem_openCam, TM_INFINITE);  // Peut-etre a changer lorsqu'on rajoutera le stop camera car besoin d'un mutex ou d'une autre tache
-        rt_mutex_acquire(&mutex_CamOpenAutorisation, TM_INFINITE);
-        cam_open_autorisation = CamOpenAutorisation;
-        rt_mutex_release(&mutex_CamOpenAutorisation);
-        if (cam_open_autorisation) {
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-            cam_statut_local = cam->Open();
-            rt_mutex_release(&mutex_Camera);
-            rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
-            CamOpened = cam_statut_local;
-            rt_mutex_release(&mutex_CamOpened);
-            if (cam_statut_local) {
-                msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
-            }
-            else {
-                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
-            }
-        }
-        else {
-            rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
-            CamOpened = false;
-            rt_mutex_release(&mutex_CamOpened);
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-            cam->Close();
-            rt_mutex_release(&mutex_Camera);
+        rt_sem_p(&sem_startCam, TM_INFINITE);
+        
+        cout <<"Start camera";
+        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        cam = new Camera(sm,10);
+        cam->Open();
+        camStarted = cam->IsOpen();
+        cam_start_local = camStarted;
+        rt_mutex_release(&mutex_camStarted);
+        if (cam_start_local) {
             msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
         }
-        // A REMETTRE MAIS PROBLM DE SEGMENT FAULT
-        //WriteInQueue(&q_messageToMon, msg_to_mon);
+        else {
+            msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+        }
+        WriteInQueue(&q_messageToMon, msg_to_mon);
+    }
+}
+
+void Tasks::StopCamera(void *arg){
+    
+    cout << "Stop " << __PRETTY_FUNCTION__ << endl << flush;
+    // Synchronization barrier (waiting that all tasks are starting)
+    rt_sem_p(&sem_barrier, TM_INFINITE);
+    
+    Message *msg_to_mon1;
+    bool cam_close_local;
+    
+    while (1) {
+        rt_sem_p(&sem_stopCam, TM_INFINITE);
+        cout <<"Stop camera";
+        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        cam->Close(); 
+        camStarted = cam->IsOpen();
+        cam_close_local = camStarted;
+        rt_mutex_release(&mutex_camStarted);
+        if (cam_close_local == false) {
+            msg_to_mon1 = new Message(MESSAGE_ANSWER_ACK);
+            
+        }
+        else {
+            msg_to_mon1 = new Message(MESSAGE_ANSWER_NACK);
+        }
+        rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+        delete cam;
+        rt_mutex_release(&mutex_com_camera);
+        WriteInQueue(&q_messageToMon, msg_to_mon1);
     }
 }
 
@@ -607,56 +634,53 @@ void Tasks::EnvoiImg(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-
-    bool cam_openned_local = false;
     bool searching_arena_local = false;
     bool use_arena_local = false;
     bool calculate_position = false;
+    bool cam_opened_local;
     MessageImg * flux_video;
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
         rt_task_wait_period(NULL);
-        rt_mutex_acquire(&mutex_CamOpened, TM_INFINITE);
-        cam_openned_local = CamOpened;
-        rt_mutex_release(&mutex_CamOpened);
-        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-        searching_arena_local = SearchingArena;
-        rt_mutex_release(&mutex_SearchingArena);
-        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-        use_arena_local = UseArena;
-        rt_mutex_release(&mutex_SearchingArena);
-        if (!searching_arena_local) {
-            if(cam_openned_local) {
-                if (use_arena_local) {
-                    rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-                    img = new Img(cam->Grab());
-                    if (calculate_position) {
-                        rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
-                        img->DrawRobot(RobotPosition);
-                        rt_mutex_release(&mutex_RobotPosition);
-                    }
-                    /*ImageMat *img_cropped=img->CropArena(ArenaResult);
-                    rt_mutex_release(&mutex_Camera);
-                    MessageImg * msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img_cropped);*/
-                    img->DrawArena(ArenaResult);
-                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                    rt_mutex_release(&mutex_Camera);
-                }
-                else {
-                    rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-                    img = new Img(cam->Grab());
-                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                    rt_mutex_release(&mutex_Camera);
-                }
-                rt_mutex_acquire(&mutex_monitor, TM_INFINITE);
+        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        cam_opened_local = camStarted;
+        rt_mutex_release(&mutex_camStarted);
+        if(cam_opened_local){ 
+//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+//            searching_arena_local = SearchingArena;
+//            use_arena_local = UseArena;
+//            rt_mutex_release(&mutex_SearchingArena);
+//            if (!searching_arena_local) {
+//                if (use_arena_local) {
+//                    rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+//                    img = new Img(cam->Grab());
+//                    if (calculate_position) {
+//                        rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
+//                        img->DrawRobot(RobotPosition);
+//                        rt_mutex_release(&mutex_RobotPosition);
+//                    }
+//                    /*ImageMat *img_cropped=img->CropArena(ArenaResult);
+//                    rt_mutex_release(&mutex_Camera);
+//                    MessageImg * msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img_cropped);*/
+//                    img->DrawArena(ArenaResult);
+//                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+//                    rt_mutex_release(&mutex_com_camera);
+//                }
+//                else {
+//                    rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+//                    img = new Img(cam->Grab());
+//                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+//                    rt_mutex_release(&mutex_com_camera);
+//                }
+                rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+                img = new Img(cam->Grab());
+                flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+                rt_mutex_release(&mutex_com_camera);
                 WriteInQueue(&q_messageToMon, flux_video);
-                rt_mutex_release(&mutex_monitor);
-               
-                
             }
         }
     }
-}
+//}
 
 void Tasks::SearchMyArena(void *arg){
     
@@ -733,13 +757,13 @@ void Tasks::CalculatePosition(void *arg){
         use_arena_local = UseArena;
         rt_mutex_release(&mutex_UseArena);
         if (calculate_position && use_arena_local) {
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+            rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
             img = new Img(cam->Grab());
             rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
             robot_position_list_local = img->SearchRobot(ArenaResult);
             rt_mutex_release(&mutex_ArenaResult); 
             
-            rt_mutex_release(&mutex_Camera);
+            rt_mutex_release(&mutex_com_camera);
             if(robot_position_list_local.empty())
             {
                 // pas sûr de celui-la
