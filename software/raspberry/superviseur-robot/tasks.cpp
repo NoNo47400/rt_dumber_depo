@@ -61,7 +61,6 @@
 void Tasks::Init() {
     int status;
     int err;
-
     /**************************************************************************************/
     /* 	Mutex creation                                                                    */
     /**************************************************************************************/
@@ -106,10 +105,7 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    
-    
     cout << "Mutexes created successfully" << endl << flush;
-
     /**************************************************************************************/
     /* 	Semaphors creation       							  */
     /**************************************************************************************/
@@ -150,7 +146,6 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }    
     cout << "Semaphores created successfully" << endl << flush;
-
     /**************************************************************************************/
     /* Tasks creation                                                                     */
     /**************************************************************************************/
@@ -203,7 +198,6 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }    
     cout << "Tasks created successfully" << endl << flush;
-
     /**************************************************************************************/
     /* Message queues creation                                                            */
     /**************************************************************************************/
@@ -212,7 +206,6 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     cout << "Queues created successfully" << endl << flush;
-
 }
 
 /**
@@ -221,7 +214,6 @@ void Tasks::Init() {
 void Tasks::Run() {
     rt_task_set_priority(NULL, T_LOPRIO);
     int err;
-
     if (err = rt_task_start(&th_server, (void(*)(void*)) & Tasks::ServerTask, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
@@ -545,7 +537,7 @@ Message *Tasks::ReadInQueue(RT_QUEUE *queue) {
 }
 
 /**
- * @brief Pour recup le niveau de batterie
+ * @brief Thread handling state of the battery of the robot.
  */
 void Tasks::BatteryState(void *arg) {
     int rs;
@@ -559,38 +551,42 @@ void Tasks::BatteryState(void *arg) {
     rt_task_set_periodic(NULL, TM_NOW, 500000000);
     while (1) {
         rt_task_wait_period(NULL);
+        // To be sure that the robot is started
         rt_mutex_acquire(&mutex_robotStarted, TM_INFINITE);
         rs = robotStarted;
         rt_mutex_release(&mutex_robotStarted);
         if (rs == 1) {
             cout << "Periodic battery state";
+            // Acquire the battery level
             rt_mutex_acquire(&mutex_robot, TM_INFINITE);
             msg = (MessageBattery*)robot.Write(new Message(MESSAGE_ROBOT_BATTERY_GET));
             rt_mutex_release(&mutex_robot);
             cout << " write battery state: " << msg;
+            // Giving it to the monitor
             WriteInQueue(&q_messageToMon, msg);
         }
         cout << endl << flush;
     }
 }   
 
-
+/**
+ * @brief Thread starting the camera.
+ */
 void Tasks::StartCamera(void *arg){
-    
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-    
     Message *msg_to_mon;
-    // Création d'une caméra
-    //cam = new Camera(sm,10);
     bool cam_start_local;
-    
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
     while (1) {
+        // Waiting for the task to be called
         rt_sem_p(&sem_startCam, TM_INFINITE);
-        
         cout <<"Start camera";
         rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        // Configuring the Camera
         cam = new Camera(sm,10);
         cam->Open();
         camStarted = cam->IsOpen();
@@ -602,24 +598,32 @@ void Tasks::StartCamera(void *arg){
         else {
             msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
         }
+        // Giving the information if the camera has started or not to the monitor
         WriteInQueue(&q_messageToMon, msg_to_mon);
     }
+    cout << endl << flush;
 }
 
+/**
+ * @brief Thread stoping the camera.
+ */
 void Tasks::StopCamera(void *arg){
     
     cout << "Stop " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-    
     Message *msg_to_mon1;
     bool cam_close_local;
-    
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
     while (1) {
         rt_sem_p(&sem_stopCam, TM_INFINITE);
+        // Waiting for the task to be called
         cout <<"Stop camera";
         rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
         cam->Close(); 
+        // Be sure that the camera has been closed
         camStarted = cam->IsOpen();
         cam_close_local = camStarted;
         rt_mutex_release(&mutex_camStarted);
@@ -631,12 +635,18 @@ void Tasks::StopCamera(void *arg){
             msg_to_mon1 = new Message(MESSAGE_ANSWER_NACK);
         }
         rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+        // Delete the camera
         delete cam;
         rt_mutex_release(&mutex_comCamera);
+        // Giving the information to the monitor
         WriteInQueue(&q_messageToMon, msg_to_mon1);
     }
+    cout << endl << flush;
 }
 
+/**
+ * @brief Thread sending images from camera
+ */
 void Tasks::EnvoiImg(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
@@ -647,16 +657,21 @@ void Tasks::EnvoiImg(void *arg){
     bool cam_opened_local;
     Arena arena_local;
     MessageImg * flux_video;
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
         rt_task_wait_period(NULL);
         rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
         cam_opened_local = camStarted;
         rt_mutex_release(&mutex_camStarted);
+        // Test if the camera is open and usable
         if(cam_opened_local){ 
             rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
             searching_arena_local = SearchingArena;
             rt_mutex_release(&mutex_SearchingArena);
+            // Test if nobody is using the cameraa to create the arena
             if (!searching_arena_local) {
                 rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
                 use_arena_local = UseArena;
@@ -665,12 +680,14 @@ void Tasks::EnvoiImg(void *arg){
                 if (use_arena_local) {  
                     rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
                     img = new Img(cam->Grab());
+                    // Draw the arena on the video flux
                     img->DrawArena(arena_local);
                     rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
                     calculate_position=CalculPosition;
                     rt_mutex_release(&mutex_CalculPosition);
                     if (calculate_position) {
                         rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
+                        // Show the robot position on the screen
                         img->DrawRobot(RobotPosition);
                         rt_mutex_release(&mutex_RobotPosition);
                     }
@@ -687,14 +704,17 @@ void Tasks::EnvoiImg(void *arg){
                 // img = new Img(cam->Grab());
                 // flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
                 // rt_mutex_release(&mutex_comCamera);
+                // Send the video flux at the monitor
                 WriteInQueue(&q_messageToMon, flux_video);
             }
         }
     }
 }
 
+/**
+ * @brief Thread searching an arena
+ */
 void Tasks::SearchMyArena(void *arg){
-    
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -702,15 +722,22 @@ void Tasks::SearchMyArena(void *arg){
     Message *msg_to_mon;
     MessageImg *msgImg;
     Arena arena_local;
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
     while (1) {
         rt_sem_p(&sem_searchingArena, TM_INFINITE);
+        // Waiting for the task to be called
         rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+        // Telling to other camera user that the arena task is using it
         SearchingArena = true;
         rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
         rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
         img = new Img(cam->Grab());
+        // Searching an arena on the camera
         arena_local = img->SearchArena();
         rt_mutex_release(&mutex_Camera);      
+        // Testing if no arena available
         if(arena_local.IsEmpty())
         {
             msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
@@ -718,35 +745,44 @@ void Tasks::SearchMyArena(void *arg){
         }
         else {
             rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+            // Saving the arena
             ArenaResult = arena_local;
             rt_mutex_release(&mutex_ArenaResult);   
             rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
             img = new Img(cam->Grab());
+            // Draw the arena for the user
             img->DrawArena(arena_local);
             msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
             rt_mutex_release(&mutex_Camera);
             WriteInQueue(&q_messageToMon, msgImg);
         }
         rt_sem_p(&sem_validArena, TM_INFINITE);
+        // Waiting the user to respond
         rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
         arena_valid_local = ArenaValid;
         rt_mutex_release(&mutex_ValidationArena);
+        // If valid, use the arena saved and show it on the video flux
         if (arena_valid_local) {
             rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             UseArena = true;
             rt_mutex_release(&mutex_UseArena);
         }
+        // If not, just don't show it on the video flux
         else {
             rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             UseArena = false;
             rt_mutex_release(&mutex_UseArena);
         }
         rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+        // Telling to other camera user that the arena task has finished
         SearchingArena = false;
         rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
    }
 }
 
+/**
+ * @brief Thread calculating robot position
+ */
 void Tasks::CalculatePosition(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
@@ -755,6 +791,9 @@ void Tasks::CalculatePosition(void *arg){
     bool use_arena_local = false;
     std::list<Position> robot_position_list_local;
     MessagePosition * msgPos;
+    /**************************************************************************************/
+    /* The task starts here                                                               */
+    /**************************************************************************************/
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
         rt_task_wait_period(NULL);
@@ -764,6 +803,7 @@ void Tasks::CalculatePosition(void *arg){
         rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
         use_arena_local = UseArena;
         rt_mutex_release(&mutex_UseArena);
+        // Test if the user asks for the robot position and be sure that the arena is used before
         if (calculate_position && use_arena_local) {
             rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
             img = new Img(cam->Grab());
@@ -771,9 +811,9 @@ void Tasks::CalculatePosition(void *arg){
             robot_position_list_local = img->SearchRobot(ArenaResult);
             rt_mutex_release(&mutex_ArenaResult); 
             rt_mutex_release(&mutex_comCamera);
+            // If no robot position founded, send juste (-1.0, -1.0)
             if(robot_position_list_local.empty())
             {
-                // pas sûr de celui-la
                 rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
                 RobotPosition.center=cv::Point2f(-1.0,-1.0);
                 msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);

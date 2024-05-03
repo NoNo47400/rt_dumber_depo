@@ -75,7 +75,6 @@ private:
     bool UseArena;
     bool CalculPosition=false;
     Position RobotPosition;
-    
     /**********************************************************************/
     /* Tasks                                                              */
     /**********************************************************************/
@@ -91,7 +90,6 @@ private:
     RT_TASK th_envoi_img;
     RT_TASK th_search_my_arena;
     RT_TASK th_calculate_position;
-    
     /**********************************************************************/
     /* Mutex                                                              */
     /**********************************************************************/
@@ -123,7 +121,6 @@ private:
     /**********************************************************************/
     int MSG_QUEUE_SIZE;
     RT_QUEUE q_messageToMon;
-    
     /**********************************************************************/
     /* Tasks' functions                                                   */
     /**********************************************************************/
@@ -173,7 +170,7 @@ private:
     void StopCamera(void *arg);
     
     /**
-     * @brief Thread sending img from camera
+     * @brief Thread sending images from camera
      */
     void EnvoiImg(void *arg);
 
