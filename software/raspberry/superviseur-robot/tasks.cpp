@@ -86,7 +86,7 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
 
-    if (err = rt_mutex_create(&mutex_com_camera, NULL)) {
+    if (err = rt_mutex_create(&mutex_comCamera, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -137,11 +137,18 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    /*if (err = rt_sem_create(&sem_openCam, NULL, 0, S_FIFO)) {
+    if (err = rt_sem_create(&sem_confirmArena, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
-    }*/
-    
+    }
+    if (err = rt_sem_create(&sem_infirmArena, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_sem_create(&sem_searchingArena, NULL, 0, S_FIFO)) {
+        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }    
     cout << "Semaphores created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -194,9 +201,7 @@ void Tasks::Init() {
     if (err = rt_task_create(&th_calculate_position, "th_calculate_position", 0, PRIORITY_CALCULATE_POSITION, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
-    }
-    
-    
+    }    
     cout << "Tasks created successfully" << endl << flush;
 
     /**************************************************************************************/
@@ -369,17 +374,20 @@ void Tasks::ReceiveFromMonTask(void *arg) {
             rt_sem_v(&sem_stopCam);
         }
         else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            SearchingArena = true;
-            rt_mutex_release(&mutex_SearchingArena);
+            rt_sem_v(&sem_searchingArena);
+            // rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+            // SearchingArena = true;
+            // rt_mutex_release(&mutex_SearchingArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+            rt_sem_v(&sem_validArena);
+            rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
             ArenaValid = true;
-            rt_mutex_release(&mutex_SearchingArena);
+            rt_mutex_release(&mutex_ValidationArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
-            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+            rt_sem_v(&sem_validArena);
+            rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
             ArenaValid = false;
-            rt_mutex_release(&mutex_SearchingArena);
+            rt_mutex_release(&mutex_ValidationArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
             rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
             CalculPosition = true;
@@ -622,15 +630,14 @@ void Tasks::StopCamera(void *arg){
         else {
             msg_to_mon1 = new Message(MESSAGE_ANSWER_NACK);
         }
-        rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+        rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
         delete cam;
-        rt_mutex_release(&mutex_com_camera);
+        rt_mutex_release(&mutex_comCamera);
         WriteInQueue(&q_messageToMon, msg_to_mon1);
     }
 }
 
 void Tasks::EnvoiImg(void *arg){
-    
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -638,6 +645,7 @@ void Tasks::EnvoiImg(void *arg){
     bool use_arena_local = false;
     bool calculate_position = false;
     bool cam_opened_local;
+    Arena arena_local;
     MessageImg * flux_video;
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
@@ -646,97 +654,97 @@ void Tasks::EnvoiImg(void *arg){
         cam_opened_local = camStarted;
         rt_mutex_release(&mutex_camStarted);
         if(cam_opened_local){ 
-//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-//            searching_arena_local = SearchingArena;
-//            use_arena_local = UseArena;
-//            rt_mutex_release(&mutex_SearchingArena);
-//            if (!searching_arena_local) {
-//                if (use_arena_local) {
-//                    rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
-//                    img = new Img(cam->Grab());
-//                    if (calculate_position) {
-//                        rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
-//                        img->DrawRobot(RobotPosition);
-//                        rt_mutex_release(&mutex_RobotPosition);
-//                    }
-//                    /*ImageMat *img_cropped=img->CropArena(ArenaResult);
-//                    rt_mutex_release(&mutex_Camera);
-//                    MessageImg * msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img_cropped);*/
-//                    img->DrawArena(ArenaResult);
-//                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-//                    rt_mutex_release(&mutex_com_camera);
-//                }
-//                else {
-//                    rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
-//                    img = new Img(cam->Grab());
-//                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-//                    rt_mutex_release(&mutex_com_camera);
-//                }
-                rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
-                img = new Img(cam->Grab());
-                flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                rt_mutex_release(&mutex_com_camera);
+            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+            searching_arena_local = SearchingArena;
+            rt_mutex_release(&mutex_SearchingArena);
+            if (!searching_arena_local) {
+                rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+                use_arena_local = UseArena;
+                arena_local = ArenaResult;
+                rt_mutex_release(&mutex_ArenaResult);
+                if (use_arena_local) {  
+                    rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+                    img = new Img(cam->Grab());
+                    img->DrawArena(arena_local);
+                    rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
+                    calculate_position=CalculPosition;
+                    rt_mutex_release(&mutex_CalculPosition);
+                    if (calculate_position) {
+                        rt_mutex_acquire(&mutex_RobotPosition, TM_INFINITE); 
+                        img->DrawRobot(RobotPosition);
+                        rt_mutex_release(&mutex_RobotPosition);
+                    }
+                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+                    rt_mutex_release(&mutex_comCamera);
+                }
+                else {
+                    rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+                    img = new Img(cam->Grab());
+                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+                    rt_mutex_release(&mutex_comCamera);
+                }
+                // rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+                // img = new Img(cam->Grab());
+                // flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
+                // rt_mutex_release(&mutex_comCamera);
                 WriteInQueue(&q_messageToMon, flux_video);
             }
         }
     }
-//}
+}
 
 void Tasks::SearchMyArena(void *arg){
     
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-    bool searching_arena_local = false;
     bool arena_valid_local = false;
     Message *msg_to_mon;
     MessageImg *msgImg;
     Arena arena_local;
-//    while (1) {
-//        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-//        searching_arena_local = SearchingArena;
-//        arena_valid_local = ArenaValid;
-//        rt_mutex_release(&mutex_SearchingArena);
-//        if (arena_valid_local) {
-//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-//            SearchingArena = false;
-//            rt_mutex_release(&mutex_SearchingArena);
-//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-//            UseArena = true;
-//            rt_mutex_release(&mutex_UseArena);
-//        }
-//        else if (searching_arena_local) {
-//            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-//            img = new Img(cam->Grab());
-//            arena_local = img->SearchArena();
-//            rt_mutex_release(&mutex_Camera);
-//                     
-//            if(arena_local.IsEmpty())
-//            {
-//                msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
-//                //WriteInQueue(&q_messageToMon, msg_to_mon);
-//            }
-//            else {
-//                rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
-//                ArenaResult = arena_local;
-//                rt_mutex_release(&mutex_ArenaResult);   
-//                rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
-//                img = new Img(cam->Grab());
-//                img->DrawArena(arena_local);
-//                msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
-//                rt_mutex_release(&mutex_Camera);
-//                WriteInQueue(&q_messageToMon, msgImg);
-//            }
-//        }
-//        else {
-//            rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-//            SearchingArena = false;
-//            rt_mutex_release(&mutex_SearchingArena);
-//            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-//            UseArena = false;
-//            rt_mutex_release(&mutex_UseArena);
-//        }
-//    }
+    while (1) {
+        rt_sem_p(&sem_searchingArena, TM_INFINITE);
+        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+        SearchingArena = true;
+        rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
+        rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+        img = new Img(cam->Grab());
+        arena_local = img->SearchArena();
+        rt_mutex_release(&mutex_Camera);      
+        if(arena_local.IsEmpty())
+        {
+            msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
+            WriteInQueue(&q_messageToMon, msg_to_mon);
+        }
+        else {
+            rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
+            ArenaResult = arena_local;
+            rt_mutex_release(&mutex_ArenaResult);   
+            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+            img = new Img(cam->Grab());
+            img->DrawArena(arena_local);
+            msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
+            rt_mutex_release(&mutex_Camera);
+            WriteInQueue(&q_messageToMon, msgImg);
+        }
+        rt_sem_p(&sem_validArena, TM_INFINITE);
+        rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
+        arena_valid_local = ArenaValid;
+        rt_mutex_release(&mutex_ValidationArena);
+        if (arena_valid_local) {
+            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+            UseArena = true;
+            rt_mutex_release(&mutex_UseArena);
+        }
+        else {
+            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+            UseArena = false;
+            rt_mutex_release(&mutex_UseArena);
+        }
+        rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
+        SearchingArena = false;
+        rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
+   }
 }
 
 void Tasks::CalculatePosition(void *arg){
@@ -757,13 +765,12 @@ void Tasks::CalculatePosition(void *arg){
         use_arena_local = UseArena;
         rt_mutex_release(&mutex_UseArena);
         if (calculate_position && use_arena_local) {
-            rt_mutex_acquire(&mutex_com_camera, TM_INFINITE);
+            rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
             img = new Img(cam->Grab());
             rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
             robot_position_list_local = img->SearchRobot(ArenaResult);
             rt_mutex_release(&mutex_ArenaResult); 
-            
-            rt_mutex_release(&mutex_com_camera);
+            rt_mutex_release(&mutex_comCamera);
             if(robot_position_list_local.empty())
             {
                 // pas sûr de celui-la
