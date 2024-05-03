@@ -100,7 +100,7 @@ private:
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
     RT_MUTEX mutex_camStarted;
-    RT_MUTEX mutex_com_camera;
+    RT_MUTEX mutex_comCamera;
     RT_MUTEX mutex_SearchingArena;
     RT_MUTEX mutex_ArenaResult;
     RT_MUTEX mutex_UseArena;
@@ -115,6 +115,9 @@ private:
     RT_SEM sem_startRobot;
     RT_SEM sem_startCam;
     RT_SEM sem_stopCam;
+    RT_SEM sem_confirmArena;
+    RT_SEM sem_infirmArena;
+    RT_SEM sem_searchingArena;
     /**********************************************************************/
     /* Message queues                                                     */
     /**********************************************************************/
