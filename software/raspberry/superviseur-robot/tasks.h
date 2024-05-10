@@ -113,8 +113,7 @@ private:
     RT_SEM sem_startRobot;
     RT_SEM sem_startCam;
     RT_SEM sem_stopCam;
-    RT_SEM sem_confirmArena;
-    RT_SEM sem_infirmArena;
+    RT_SEM sem_validArena;
     RT_SEM sem_searchingArena;
     /**********************************************************************/
     /* Message queues                                                     */
@@ -172,7 +171,7 @@ private:
     /**
      * @brief Thread sending images from camera
      */
-    void EnvoiImg(void *arg);
+    void SendImg(void *arg);
 
     /**
      * @brief Thread searching an arena
@@ -182,7 +181,7 @@ private:
     /**
      * @brief Thread calculating robot position
      */
-    void CalculatePosition(void *arg);
+    void FindPosition(void *arg);
     
     
     

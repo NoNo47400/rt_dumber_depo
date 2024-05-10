@@ -25,13 +25,12 @@
 #define PRIORITY_TSENDTOMON 22
 #define PRIORITY_TRECEIVEFROMMON 25
 #define PRIORITY_TSTARTROBOT 20
-#define PRIORITY_TCAMERA 21
 #define PRIORITY_BATTERY 19
 #define PRIORITY_START_CAMERA 21
 #define PRIORITY_STOP_CAMERA 22
-#define PRIORITY_ENVOI_CAMERA 20
+#define PRIORITY_SEND_CAMERA 20
 #define PRIORITY_SEARCH_MY_ARENA 19
-#define PRIORITY_CALCULATE_POSITION 19
+#define PRIORITY_FIND_POSITION 19
 
 
 
@@ -84,7 +83,6 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-
     if (err = rt_mutex_create(&mutex_comCamera, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
@@ -102,6 +100,10 @@ void Tasks::Init() {
         exit(EXIT_FAILURE);
     }
     if (err = rt_mutex_create(&mutex_ArenaResult, NULL)) {
+        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
+        exit(EXIT_FAILURE);
+    }
+    if (err = rt_mutex_create(&mutex_CalculPosition, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -133,11 +135,7 @@ void Tasks::Init() {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_sem_create(&sem_confirmArena, NULL, 0, S_FIFO)) {
-        cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_sem_create(&sem_infirmArena, NULL, 0, S_FIFO)) {
+    if (err = rt_sem_create(&sem_validArena, NULL, 0, S_FIFO)) {
         cerr << "Error semaphore create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -185,7 +183,7 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_envoi_img, "th_envoi_camera", 0, PRIORITY_ENVOI_CAMERA, 0)) {
+    if (err = rt_task_create(&th_envoi_img, "th_envoi_camera", 0, PRIORITY_SEND_CAMERA, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -193,7 +191,7 @@ void Tasks::Init() {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_create(&th_calculate_position, "th_calculate_position", 0, PRIORITY_CALCULATE_POSITION, 0)) {
+    if (err = rt_task_create(&th_calculate_position, "th_calculate_position", 0, PRIORITY_FIND_POSITION, 0)) {
         cerr << "Error task create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }    
@@ -250,7 +248,7 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_start(&th_envoi_img, (void(*)(void*)) & Tasks::EnvoiImg, this)) {
+    if (err = rt_task_start(&th_envoi_img, (void(*)(void*)) & Tasks::SendImg, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -258,7 +256,7 @@ void Tasks::Run() {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_task_start(&th_calculate_position, (void(*)(void*)) & Tasks::CalculatePosition, this)) {
+    if (err = rt_task_start(&th_calculate_position, (void(*)(void*)) & Tasks::FindPosition, this)) {
         cerr << "Error task start: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -367,19 +365,16 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         }
         else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
             rt_sem_v(&sem_searchingArena);
-            // rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
-            // SearchingArena = true;
-            // rt_mutex_release(&mutex_SearchingArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
             rt_sem_v(&sem_validArena);
-            rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
+            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             ArenaValid = true;
-            rt_mutex_release(&mutex_ValidationArena);
+            rt_mutex_release(&mutex_UseArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
             rt_sem_v(&sem_validArena);
-            rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
+            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             ArenaValid = false;
-            rt_mutex_release(&mutex_ValidationArena);
+            rt_mutex_release(&mutex_UseArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
             rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
             CalculPosition = true;
@@ -647,7 +642,7 @@ void Tasks::StopCamera(void *arg){
 /**
  * @brief Thread sending images from camera
  */
-void Tasks::EnvoiImg(void *arg){
+void Tasks::SendImg(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
@@ -731,12 +726,12 @@ void Tasks::SearchMyArena(void *arg){
         rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
         // Telling to other camera user that the arena task is using it
         SearchingArena = true;
-        rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
-        rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+        rt_mutex_release(&mutex_SearchingArena);
+        rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
         img = new Img(cam->Grab());
         // Searching an arena on the camera
         arena_local = img->SearchArena();
-        rt_mutex_release(&mutex_Camera);      
+        rt_mutex_release(&mutex_comCamera);      
         // Testing if no arena available
         if(arena_local.IsEmpty())
         {
@@ -748,42 +743,32 @@ void Tasks::SearchMyArena(void *arg){
             // Saving the arena
             ArenaResult = arena_local;
             rt_mutex_release(&mutex_ArenaResult);   
-            rt_mutex_acquire(&mutex_Camera, TM_INFINITE);
+            rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
             img = new Img(cam->Grab());
             // Draw the arena for the user
             img->DrawArena(arena_local);
             msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
-            rt_mutex_release(&mutex_Camera);
+            rt_mutex_release(&mutex_comCamera);
             WriteInQueue(&q_messageToMon, msgImg);
         }
         rt_sem_p(&sem_validArena, TM_INFINITE);
         // Waiting the user to respond
-        rt_mutex_acquire(&mutex_ValidationArena, TM_INFINITE);
-        arena_valid_local = ArenaValid;
-        rt_mutex_release(&mutex_ValidationArena);
+        rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
         // If valid, use the arena saved and show it on the video flux
-        if (arena_valid_local) {
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = true;
-            rt_mutex_release(&mutex_UseArena);
-        }
         // If not, just don't show it on the video flux
-        else {
-            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-            UseArena = false;
-            rt_mutex_release(&mutex_UseArena);
-        }
+        UseArena = ArenaValid;
+        rt_mutex_release(&mutex_UseArena);  
         rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
         // Telling to other camera user that the arena task has finished
         SearchingArena = false;
-        rt_mutex_release(&mutex_SearchingArena, TM_INFINITE);
+        rt_mutex_release(&mutex_SearchingArena);
    }
 }
 
 /**
  * @brief Thread calculating robot position
  */
-void Tasks::CalculatePosition(void *arg){
+void Tasks::FindPosition(void *arg){
     cout << "Start " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
