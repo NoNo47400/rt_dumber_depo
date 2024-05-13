@@ -52,7 +52,8 @@ Les auteurs de ce projet sont :
 * **Noël JUMIN** _alias_ [@NoNo47400](https://github.com/NoNo47400).
 * **Clément MARCE** _alias_ [@Clemucho](https://github.com/Lab0x08).
         
-Ce repo est un fork du projet [INSA Real Time](https://github.com/INSA-GEI/dumber/tree/evoxx-dumber-v3).       
+Ce repo est un fork du projet [INSA Real Time](https://github.com/INSA-GEI/dumber/tree/evoxx-dumber-v3).    
+Vous pourrez retrouver la présentation réalisée lors de notre soutenance [ici](https://www.canva.com/design/DAGEunrw5xk/ZyPaIWjL1mUedC6BpU8Beg/view?utm_content=DAGEunrw5xk&utm_campaign=designshare&utm_medium=link&utm_source=editor).
 
 
 
