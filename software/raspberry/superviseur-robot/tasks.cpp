@@ -28,7 +28,7 @@
 #define PRIORITY_BATTERY 19
 #define PRIORITY_START_CAMERA 21
 #define PRIORITY_STOP_CAMERA 22
-#define PRIORITY_SEND_CAMERA 18
+#define PRIORITY_SEND_CAMERA 19
 #define PRIORITY_SEARCH_MY_ARENA 20
 #define PRIORITY_FIND_POSITION 19
 
@@ -79,11 +79,7 @@ void Tasks::Init() {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
-    if (err = rt_mutex_create(&mutex_camStarted, NULL)) {
-        cerr << "Error mutex create: " << strerror(-err) << endl << flush;
-        exit(EXIT_FAILURE);
-    }
-    if (err = rt_mutex_create(&mutex_comCamera, NULL)) {
+    if (err = rt_mutex_create(&mutex_cam, NULL)) {
         cerr << "Error mutex create: " << strerror(-err) << endl << flush;
         exit(EXIT_FAILURE);
     }
@@ -366,15 +362,15 @@ void Tasks::ReceiveFromMonTask(void *arg) {
         else if (msgRcv->CompareID(MESSAGE_CAM_ASK_ARENA)) {
             rt_sem_v(&sem_searchingArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_CONFIRM)) {
-            rt_sem_v(&sem_validArena);
             rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             ArenaValid = true;
             rt_mutex_release(&mutex_UseArena);
-        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
             rt_sem_v(&sem_validArena);
+        } else if (msgRcv->CompareID(MESSAGE_CAM_ARENA_INFIRM)) {
             rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
             ArenaValid = false;
             rt_mutex_release(&mutex_UseArena);
+            rt_sem_v(&sem_validArena);
         } else if (msgRcv->CompareID(MESSAGE_CAM_POSITION_COMPUTE_START)) {
             rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
             CalculPosition = true;
@@ -580,13 +576,13 @@ void Tasks::StartCamera(void *arg){
         // Waiting for the task to be called
         rt_sem_p(&sem_startCam, TM_INFINITE);
         cout <<"Start camera";
-        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        rt_mutex_acquire(&mutex_cam, TM_INFINITE);
         // Configuring the Camera
         cam = new Camera(sm,10);
         cam->Open();
         camStarted = cam->IsOpen();
         cam_start_local = camStarted;
-        rt_mutex_release(&mutex_camStarted);
+        rt_mutex_release(&mutex_cam);
         if (cam_start_local) {
             msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
         }
@@ -607,7 +603,7 @@ void Tasks::StopCamera(void *arg){
     cout << "Stop " << __PRETTY_FUNCTION__ << endl << flush;
     // Synchronization barrier (waiting that all tasks are starting)
     rt_sem_p(&sem_barrier, TM_INFINITE);
-    Message *msg_to_mon1;
+    Message *msg_to_mon;
     bool cam_close_local;
     /**************************************************************************************/
     /* The task starts here                                                               */
@@ -616,25 +612,24 @@ void Tasks::StopCamera(void *arg){
         rt_sem_p(&sem_stopCam, TM_INFINITE);
         // Waiting for the task to be called
         cout <<"Stop camera";
-        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        rt_mutex_acquire(&mutex_cam, TM_INFINITE);
         cam->Close(); 
         // Be sure that the camera has been closed
         camStarted = cam->IsOpen();
-        cam_close_local = camStarted;
-        rt_mutex_release(&mutex_camStarted);
-        if (cam_close_local == false) {
-            msg_to_mon1 = new Message(MESSAGE_ANSWER_ACK);
-            
+        cam_close_local = !camStarted;
+        rt_mutex_release(&mutex_cam);
+        if (cam_close_local == true) {
+            msg_to_mon = new Message(MESSAGE_ANSWER_ACK);
+            rt_mutex_acquire(&mutex_cam, TM_INFINITE);
+            // Delete the camera
+            delete cam;
+            rt_mutex_release(&mutex_cam);
         }
         else {
-            msg_to_mon1 = new Message(MESSAGE_ANSWER_NACK);
+            msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
         }
-        rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
-        // Delete the camera
-        delete cam;
-        rt_mutex_release(&mutex_comCamera);
         // Giving the information to the monitor
-        WriteInQueue(&q_messageToMon, msg_to_mon1);
+        WriteInQueue(&q_messageToMon, msg_to_mon);
     }
     cout << endl << flush;
 }
@@ -652,17 +647,22 @@ void Tasks::SendImg(void *arg){
     bool cam_opened_local;
     Arena arena_local;
     MessageImg * flux_video;
+    Img * img;
     /**************************************************************************************/
     /* The task starts here                                                               */
     /**************************************************************************************/
     rt_task_set_periodic(NULL, TM_NOW, 100000000);
     while (1) {
         rt_task_wait_period(NULL);
-        rt_mutex_acquire(&mutex_camStarted, TM_INFINITE);
+        rt_mutex_acquire(&mutex_cam, TM_INFINITE);
         cam_opened_local = camStarted;
-        rt_mutex_release(&mutex_camStarted);
+        rt_mutex_release(&mutex_cam);
         // Test if the camera is open and usable
+        
         if(cam_opened_local){ 
+            rt_mutex_acquire(&mutex_cam, TM_INFINITE);  
+            img = new Img(cam->Grab());
+            rt_mutex_release(&mutex_cam);
             rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
             searching_arena_local = SearchingArena;
             rt_mutex_release(&mutex_SearchingArena);
@@ -673,8 +673,6 @@ void Tasks::SendImg(void *arg){
                 arena_local = ArenaResult;
                 rt_mutex_release(&mutex_ArenaResult);
                 if (use_arena_local) {  
-                    rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
-                    img = new Img(cam->Grab());
                     // Draw the arena on the video flux
                     img->DrawArena(arena_local);
                     rt_mutex_acquire(&mutex_CalculPosition, TM_INFINITE);
@@ -686,20 +684,9 @@ void Tasks::SendImg(void *arg){
                         img->DrawRobot(RobotPosition);
                         rt_mutex_release(&mutex_RobotPosition);
                     }
-                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                    rt_mutex_release(&mutex_comCamera);
+                    
                 }
-                else {
-                    rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
-                    img = new Img(cam->Grab());
-                    flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                    rt_mutex_release(&mutex_comCamera);
-                }
-                // rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
-                // img = new Img(cam->Grab());
-                // flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
-                // rt_mutex_release(&mutex_comCamera);
-                // Send the video flux at the monitor
+                flux_video = new MessageImg(MESSAGE_CAM_IMAGE, img);
                 WriteInQueue(&q_messageToMon, flux_video);
             }
         }
@@ -716,6 +703,7 @@ void Tasks::SearchMyArena(void *arg){
     bool arena_valid_local = false;
     Message *msg_to_mon;
     MessageImg *msgImg;
+    Img * img;
     Arena arena_local;
     /**************************************************************************************/
     /* The task starts here                                                               */
@@ -727,14 +715,15 @@ void Tasks::SearchMyArena(void *arg){
         // Telling to other camera user that the arena task is using it
         SearchingArena = true;
         rt_mutex_release(&mutex_SearchingArena);
-        rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+        rt_mutex_acquire(&mutex_cam, TM_INFINITE);
         img = new Img(cam->Grab());
+        rt_mutex_release(&mutex_cam);  
         // Searching an arena on the camera
         arena_local = img->SearchArena();
-        rt_mutex_release(&mutex_comCamera);      
         // Testing if no arena available
         if(arena_local.IsEmpty())
         {
+            delete img;
             msg_to_mon = new Message(MESSAGE_ANSWER_NACK);
             WriteInQueue(&q_messageToMon, msg_to_mon);
         }
@@ -743,25 +732,23 @@ void Tasks::SearchMyArena(void *arg){
             // Saving the arena
             ArenaResult = arena_local;
             rt_mutex_release(&mutex_ArenaResult);   
-            rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
-            img = new Img(cam->Grab());
             // Draw the arena for the user
             img->DrawArena(arena_local);
             msgImg = new MessageImg(MESSAGE_CAM_IMAGE, img);
-            rt_mutex_release(&mutex_comCamera);
             WriteInQueue(&q_messageToMon, msgImg);
+            rt_sem_p(&sem_validArena, TM_INFINITE);
+            // Waiting the user to respond
+            rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
+            // If valid, use the arena saved and show it on the video flux
+            // If not, just don't show it on the video flux
+            UseArena = ArenaValid;
+            rt_mutex_release(&mutex_UseArena);  
         }
-        rt_sem_p(&sem_validArena, TM_INFINITE);
-        // Waiting the user to respond
-        rt_mutex_acquire(&mutex_UseArena, TM_INFINITE);
-        // If valid, use the arena saved and show it on the video flux
-        // If not, just don't show it on the video flux
-        UseArena = ArenaValid;
-        rt_mutex_release(&mutex_UseArena);  
         rt_mutex_acquire(&mutex_SearchingArena, TM_INFINITE);
         // Telling to other camera user that the arena task has finished
         SearchingArena = false;
         rt_mutex_release(&mutex_SearchingArena);
+        
    }
 }
 
@@ -776,6 +763,7 @@ void Tasks::FindPosition(void *arg){
     bool use_arena_local = false;
     std::list<Position> robot_position_list_local;
     MessagePosition * msgPos;
+    Img * img;
     /**************************************************************************************/
     /* The task starts here                                                               */
     /**************************************************************************************/
@@ -790,12 +778,13 @@ void Tasks::FindPosition(void *arg){
         rt_mutex_release(&mutex_UseArena);
         // Test if the user asks for the robot position and be sure that the arena is used before
         if (calculate_position && use_arena_local) {
-            rt_mutex_acquire(&mutex_comCamera, TM_INFINITE);
+            rt_mutex_acquire(&mutex_cam, TM_INFINITE);
             img = new Img(cam->Grab());
+            rt_mutex_release(&mutex_cam);
             rt_mutex_acquire(&mutex_ArenaResult, TM_INFINITE);
             robot_position_list_local = img->SearchRobot(ArenaResult);
             rt_mutex_release(&mutex_ArenaResult); 
-            rt_mutex_release(&mutex_comCamera);
+            delete img;
             // If no robot position founded, send juste (-1.0, -1.0)
             if(robot_position_list_local.empty())
             {
@@ -810,6 +799,7 @@ void Tasks::FindPosition(void *arg){
                 msgPos = new MessagePosition(MESSAGE_CAM_POSITION, RobotPosition);
                 rt_mutex_release(&mutex_RobotPosition);
             }
+            WriteInQueue(&q_messageToMon, msgPos);
         }
     }
 }

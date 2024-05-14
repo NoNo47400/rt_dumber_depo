@@ -69,7 +69,6 @@ private:
     bool camStarted = false;
     bool SearchingArena = false;
     Camera * cam;
-    Img * img;
     bool ArenaValid = false;
     Arena ArenaResult;
     bool UseArena;
@@ -97,8 +96,7 @@ private:
     RT_MUTEX mutex_robot;
     RT_MUTEX mutex_robotStarted;
     RT_MUTEX mutex_move;
-    RT_MUTEX mutex_camStarted;
-    RT_MUTEX mutex_comCamera;
+    RT_MUTEX mutex_cam;
     RT_MUTEX mutex_SearchingArena;
     RT_MUTEX mutex_ArenaResult;
     RT_MUTEX mutex_UseArena;
